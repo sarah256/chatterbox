@@ -55,9 +55,10 @@ Unchanged from the spec.
 
 | Layer | Choice |
 |---|---|
-| App | Next.js App Router, TypeScript, one deployable |
+| App | Next.js 16 App Router with Cache Components, TypeScript, one deployable |
+| Runtime | Node 22 (`.nvmrc`); shadcn's CLI needs at least 20.18.1 |
 | UI | Tailwind, shadcn/ui, Lucide, `next-themes` |
-| Data | Neon PostgreSQL, Drizzle ORM, migrations |
+| Data | Neon PostgreSQL over its WebSocket `Pool` driver (the HTTP driver cannot run interactive transactions), Drizzle ORM, migrations in `drizzle/` |
 | Auth | Clerk |
 | Models | Vercel AI SDK, OpenAI provider, Anthropic provider |
 | Client UI state | Zustand |
@@ -66,6 +67,8 @@ Unchanged from the spec.
 PostgreSQL is the source of truth. Conversation rows are not shaped around a single vendor. Providers accept a message list and stream chunks. They do not import Drizzle.
 
 Add `next-themes` in phase 1 so light and dark mode are a token choice, not a later retrofit.
+
+Cache Components is on. Anything that reads the request (Clerk's `auth()`, cookies, headers, `useSearchParams`, `usePathname`) must render inside a `<Suspense>` boundary, or `next build` fails. Run `next build` before calling a phase done, because `next dev` does not catch this. The bundled docs in `node_modules/next/dist/docs/` match the installed version and win over memory.
 
 ---
 
@@ -81,10 +84,12 @@ chatterbox/
   tsconfig.json
   next.config.ts
   drizzle.config.ts
-  proxy.ts                       # Clerk (middleware.ts before Next.js 16)
+  drizzle/                       # generated SQL migrations
   components.json
   .env.example
+  .nvmrc
   src/
+    proxy.ts                     # clerkMiddleware (middleware.ts before Next.js 16)
     app/
       layout.tsx                 # root html, fonts, theme provider
       (auth)/
@@ -173,7 +178,7 @@ chatterbox/
 
 `src/server` is imported only from route handlers, server components, and other server modules. Client components import types from `src/lib` and call `/api`. `components/ui` is the shadcn directory the spec sketch leaves out.
 
-Drizzle config, the Clerk proxy file, and `.env.example` stay at the repo root.
+Drizzle config, migrations, and `.env.example` stay at the repo root. `proxy.ts` sits in `src/` because the app uses a `src` directory; Next.js only reads it next to `app/`.
 
 ---
 
@@ -214,13 +219,14 @@ The thread panel is resizable. A vertical drag handle sits on its left edge, bet
 - Default width 440px, inside the spec’s 400–500px range.
 - Minimum 320px, so the thread composer stays usable.
 - Maximum leaves the channel at least 480px wide, so the originating conversation stays readable.
+- When the window is too narrow for both minimums, the thread keeps its 320px and the channel gives up width first.
 - Double-clicking the handle resets to the default width.
 - The handle is keyboard accessible: focusable, left and right arrow keys resize in steps, with a visible focus ring and a `col-resize` cursor on hover.
 - The chosen width persists across threads, channel switches, closing and reopening the panel, and browser refresh.
 - If the window shrinks below what the stored width allows, clamp the panel for display without overwriting the saved preference.
 - Resizing re-lays out the message lists without resetting either panel’s scroll position or interrupting a reply that is streaming.
 
-Use shadcn’s `Resizable` component (built on `react-resizable-panels`) for the channel/thread split rather than writing pointer-handling code. Pixel limits are converted to that library’s percentage sizes from the container width.
+Use shadcn’s `Resizable` component (built on `react-resizable-panels` v4) for the channel/thread split rather than writing pointer-handling code. v4 takes pixel sizes directly, and the thread panel uses `groupResizeBehavior="preserve-pixel-size"` so a window resize changes the channel, not the thread. The built-in double-click resets to `defaultSize`, which is the saved width, so it is disabled in favor of a handler that resets to 440px.
 
 ---
 
@@ -345,7 +351,7 @@ Scroll position of the channel list is component state, preserved because the ch
 
 ## 10. Authorization
 
-`proxy.ts` runs `clerkMiddleware` and sends unauthenticated visitors to Clerk sign-in. It is a first gate, not the authorization check.
+`src/proxy.ts` runs `clerkMiddleware()` to attach the session. It does not protect routes: Clerk 7 deprecates path matching with `createRouteMatcher`, because path rules can drift from how Next.js routes requests. The `(workspace)` layout renders `RequireUser` (`server/auth/require-user.tsx`), which calls `auth.protect()` inside the layout’s `<Suspense>` boundary and sends signed-out visitors to sign-in. That is a page gate only. Each page that loads data, and each route handler, still authorizes for itself.
 
 Every route then:
 
