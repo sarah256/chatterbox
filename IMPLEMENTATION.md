@@ -206,9 +206,18 @@ The channel is the route. The thread is not.
 
 Opening a thread writes the query param. It does not push a new channel route, remount the message list, or reset scroll. Closing the panel removes `thread` and leaves the channel mounted. Switching channels clears the thread param because a thread belongs to one channel.
 
-The workspace home route redirects to the last channel id stored for this browser. Refresh on `/c/:id?thread=:id` restores both.
+The workspace home route redirects to the last channel id stored for this browser, or to `#general` when there is none or that channel is gone. Refresh on `/c/:id?thread=:id` restores both.
 
 For the MVP there is one workspace, created on the first authenticated request and owned by the Clerk user id. The header can show its name. A workspace switcher is not a behavior to build yet.
+
+### Default `#general` channel
+
+Every workspace always has at least one channel, so a new user lands somewhere they can type.
+
+- The transaction that creates the workspace also creates a default project named “General” and a channel named `general` inside it.
+- Both rows carry `isDefault = true`. They can be renamed, but they cannot be archived or deleted, and the default channel cannot be moved out of the default project. Route handlers reject those operations; the UI hides the actions.
+- A unique partial index on `channels(project_id) WHERE is_default` and one on `projects(workspace_id) WHERE is_default` keep it to one of each.
+- While the MVP has one workspace per user, a unique index on `workspaces.owner_id` stops two simultaneous first loads from creating two workspaces. The creating insert uses `ON CONFLICT DO NOTHING` and then reads the winner back. That index is relaxed when multiple workspaces arrive.
 
 Sidebar collapse and thread-panel width are local UI preferences (Zustand, persisted in `localStorage`). They are not rows.
 
@@ -378,12 +387,13 @@ Done when: an authenticated user sees the shell in light and dark mode, the data
 
 ### Phase 2 — Organization
 
-- Lazy-create the personal workspace.
-- Create, rename, reorder, and archive projects and channels.
+- Lazy-create the personal workspace together with the default General project and `#general` channel (section 5). Migration: `is_default` on projects and channels, their partial unique indexes, and the unique `workspaces.owner_id` index.
+- Home route redirects to the last channel, falling back to `#general`.
+- Create, rename, reorder, and archive projects and channels. The default project and channel can only be renamed.
 - Sidebar tree. Persist expansion and order.
 - Channel route and last-channel redirect.
 
-Done when: Engineering / AWS Architecture can be created and survives a refresh, and switching channels changes only the center panel.
+Done when: a brand-new user lands in `#general` after signing up, Engineering / AWS Architecture can be created and survives a refresh, switching channels changes only the center panel, and archiving or deleting `#general` is refused by the API.
 
 ### Phase 3 — Channel conversations
 
@@ -457,6 +467,7 @@ These are deliberate differences from [PROPOSAL.md](PROPOSAL.md). Reject any of 
 | Delete | “Delete” action, no rule given | Soft delete with `deletedAt`. A deleted thread root shows a placeholder and its thread stays readable (section 6). |
 | Streaming transport | SSE or the AI SDK protocol | AI SDK protocol only. |
 | Workspace creation | `POST /api/workspaces` | Also auto-create the single personal workspace on first authenticated load. |
+| Default channel | None; the workspace starts empty | Every workspace starts with a General project holding `#general`. Both can be renamed but never archived or deleted (section 5). |
 | Theme | Phase 6 | `next-themes` in phase 1. |
 | Thread panel resizing | “Allow resizing the panel if practical” | Required in phase 1, with limits and a persisted width (section 5). |
 | Route shape | `/workspace/[workspaceId]/[channelId]` | `/c/[channelId]?thread=` while there is one workspace. |
